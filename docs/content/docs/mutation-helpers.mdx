@@ -1,0 +1,148 @@
+---
+title: Mutation Helpers
+description: Insert, upsert, and update translated content with focused helpers for both schema strategies.
+---
+
+All mutation helpers work with your existing Drizzle `db` instance. Where applicable, operations are transactional -- a failure in any step rolls back the entire mutation.
+
+## Translation table mutations
+
+### Insert parent + translations atomically
+
+`insertWithTranslations()` creates a parent row and its translation rows in a single transaction. If any translation insert fails, the parent insert is rolled back.
+
+```ts
+import { insertWithTranslations } from "drizzle-i18n/pg";
+
+const product = await insertWithTranslations(db, products, productI18n, {
+  values: { sku: "LAPTOP-01", price: 1299 },
+  translations: {
+    en: { name: "Laptop", description: "Professional laptop" },
+    ar: { name: "حاسوب محمول", description: "حاسوب محمول احترافي" },
+  },
+});
+// => { sku: "LAPTOP-01", price: 1299, id: 5 }
+```
+
+The returned object includes the auto-generated primary key, so you can use it immediately without an extra query.
+
+### Upsert a single locale row
+
+`upsertTranslation()` inserts a translation row or updates it if the `(parent_id, locale)` pair already exists. This uses the database's native `ON CONFLICT DO UPDATE`.
+
+```ts
+import { upsertTranslation } from "drizzle-i18n/pg";
+
+await upsertTranslation(db, productI18n, {
+  product_id: 5,
+  locale: "fr",
+  name: "Ordinateur portable",
+  description: "Ordinateur portable professionnel",
+});
+```
+
+If a French translation for product 5 already exists, it is updated. Otherwise, a new row is inserted.
+
+### Bulk upsert multiple locales
+
+`setTranslations()` upserts translation rows for multiple locales at once. Only the provided locales are written -- other locales are untouched. Within each locale, only the provided columns are updated -- omitted fields are not set to NULL.
+
+```ts
+import { setTranslations } from "drizzle-i18n/pg";
+
+await setTranslations(db, productI18n, {
+  product_id: 5,
+  translations: {
+    en: { name: "Laptop Pro" },  // only updates name, description stays
+    de: { name: "Laptop", description: "Professioneller Laptop" },
+  },
+});
+```
+
+This is safe for partial updates: if the English translation already has a `description`, passing only `{ name: "Laptop Pro" }` will not null it out. The upsert's `SET` clause only includes columns present in the provided data.
+
+## JSON column mutations
+
+### Patch a single locale value
+
+`updateLocale()` sets one locale key inside a JSON column without affecting other locale keys. It handles NULL columns (first write) by coalescing with an empty JSON object.
+
+```ts
+import { eq } from "drizzle-orm";
+import { updateLocale } from "drizzle-i18n/pg";
+
+await updateLocale(db, categories, categories.name, {
+  where: eq(categories.id, 1),
+  locale: "es",
+  value: "Electronica",
+});
+```
+
+Before: `{ "en": "Electronics", "fr": "Electronique" }`
+After: `{ "en": "Electronics", "fr": "Electronique", "es": "Electronica" }`
+
+For full-column overwrites (setting all locales at once), use a standard Drizzle `update`:
+
+```ts
+await db
+  .update(categories)
+  .set({
+    name: { en: "Electronics", fr: "Electronique", es: "Electronica" },
+  })
+  .where(eq(categories.id, 1));
+```
+
+## Batch export and import
+
+These helpers convert between flat translation rows and a grouped locale-keyed format, useful for CMS sync, seed files, or migration scripts.
+
+### Export translations
+
+`exportTranslations()` takes the raw rows from a translations table and groups them by parent ID, then by locale.
+
+```ts
+import { exportTranslations } from "drizzle-i18n/pg";
+
+const rows = await db.select().from(productI18n.table);
+
+const exported = exportTranslations(rows, productI18n, "product_id");
+// => {
+//   1: {
+//     en: { name: "Smartphone", description: "Flagship phone" },
+//     ar: { name: "هاتف ذكي", description: "هاتف رائد" },
+//   },
+//   5: {
+//     en: { name: "Laptop", description: "Professional laptop" },
+//     ...
+//   },
+// }
+```
+
+### Import translations
+
+`importTranslations()` is the inverse -- it takes the grouped format and produces flat rows ready for `db.insert().values()`.
+
+```ts
+import { importTranslations } from "drizzle-i18n/pg";
+
+const data = {
+  1: {
+    en: { name: "Smartphone", description: "Flagship phone" },
+    ar: { name: "هاتف ذكي", description: "هاتف رائد" },
+  },
+};
+
+const rows = importTranslations(data, "product_id");
+// => [
+//   { product_id: "1", locale: "en", name: "Smartphone", description: "Flagship phone" },
+//   { product_id: "1", locale: "ar", name: "هاتف ذكي", description: "هاتف رائد" },
+// ]
+
+await db.insert(productI18n.table).values(rows);
+```
+
+You can also pass a custom locale key name as the third argument if your schema uses something other than `"locale"`:
+
+```ts
+const rows = importTranslations(data, "product_id", "lang");
+```

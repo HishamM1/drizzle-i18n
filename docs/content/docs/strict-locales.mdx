@@ -1,0 +1,137 @@
+---
+title: Strict Locales
+description: Narrow locale keys at the type level and validate them at runtime with createI18n().
+---
+
+By default, all locale parameters accept `string`. This is flexible but means a typo like `"ens"` instead of `"en"` silently returns null translations. The `createI18n()` factory solves this by locking every helper to your exact set of supported locales.
+
+## Create a scoped helper set
+
+```ts
+import { createI18n } from "drizzle-i18n/pg";
+
+const i18n = createI18n({
+  defaultLocale: "en",
+  locales: ["en", "ar", "fr"] as const,
+  strict: true,
+});
+```
+
+The `as const` on the locales array is what enables compile-time narrowing. Without it, the type widens to `string[]` and you lose the type safety.
+
+## What changes
+
+### Compile-time narrowing
+
+Every locale argument becomes typed as `"en" | "ar" | "fr"` instead of `string`:
+
+```ts
+i18n.forLocale(categories.name, "ar");   // OK
+i18n.forLocale(categories.name, "de");   // type error: '"de"' is not assignable to '"en" | "ar" | "fr"'
+```
+
+This applies to all helpers: `forLocale`, `withTranslation`, `upsertTranslation`, `setTranslations`, `updateLocale`, `insertWithTranslations`.
+
+### Runtime validation
+
+When `strict: true`, passing an unknown locale throws at runtime with a clear error message:
+
+```
+drizzle-i18n: unknown locale "de" in forLocale. Valid locales: en, ar, fr
+```
+
+This catches issues even when TypeScript types are bypassed (e.g. locale strings coming from user input or API parameters).
+
+### Typed JSON locale maps
+
+`i18n.jsonTranslations()` produces columns typed as `LocaleMap<["en", "ar", "fr"], "en">` instead of `Record<string, string>`. The default locale key (`"en"`) is required, and other locales are optional:
+
+```ts
+const categories = pgTable("categories", {
+  id: serial("id").primaryKey(),
+  ...i18n.jsonTranslations({
+    name: { notNull: true },
+  }),
+});
+
+// When inserting:
+await db.insert(categories).values({
+  name: { en: "Electronics" },                    // OK: default locale is required
+});
+
+await db.insert(categories).values({
+  name: { en: "Electronics", ar: "إلكترونيات" },  // OK: other locales are optional
+});
+
+await db.insert(categories).values({
+  name: { ar: "إلكترونيات" },                      // type error: 'en' is missing
+});
+```
+
+## Full example
+
+```ts
+import { pgTable, serial, text, integer } from "drizzle-orm/pg-core";
+import { createI18n } from "drizzle-i18n/pg";
+
+const i18n = createI18n({
+  defaultLocale: "en",
+  locales: ["en", "ar", "fr"] as const,
+  strict: true,
+});
+
+// Schema
+const products = pgTable("products", {
+  id: serial("id").primaryKey(),
+  sku: text("sku").notNull(),
+  price: integer("price").notNull(),
+});
+
+const productI18n = i18n.translationTable(products, {
+  name: text("name").notNull(),
+  description: text("description"),
+});
+
+// Query -- locale arguments are type-checked
+const rows = await i18n.withTranslation(db, products, productI18n, {
+  locale: "ar",
+  fallback: "en",
+});
+
+// Insert -- locale keys in translations are type-checked
+await i18n.insertWithTranslations(db, products, productI18n, {
+  values: { sku: "MUG-01", price: 15 },
+  translations: {
+    en: { name: "Mug" },
+    ar: { name: "كوب" },
+  },
+});
+```
+
+## All factory helpers
+
+The object returned by `createI18n()` wraps every helper from the dialect entry point. Each one enforces the configured locale union:
+
+| Helper | Strategy | Description |
+| --- | --- | --- |
+| `i18n.translationTable()` | Separate table | Same as top-level, but available on the factory |
+| `i18n.jsonTranslations()` | JSON column | Produces columns with `LocaleMap` typing |
+| `i18n.forLocale()` | JSON column | Extract one locale with type-checked key |
+| `i18n.withTranslation()` | Separate table | Locale-aware LEFT JOIN with type-checked locales |
+| `i18n.upsertTranslation()` | Separate table | Upsert one locale row with runtime validation |
+| `i18n.setTranslations()` | Separate table | Bulk upsert with type-checked locale keys |
+| `i18n.updateLocale()` | JSON column | Patch one JSON key with type-checked locale |
+| `i18n.insertWithTranslations()` | Separate table | Atomic insert with type-checked locale keys |
+
+## When to use createI18n()
+
+Use the factory when:
+
+- Your app has a fixed, known set of locales
+- You want to catch locale typos at compile time
+- Locale strings come from user input and you want runtime validation as a safety net
+
+Skip it when:
+
+- Locales are dynamic (loaded from a database or config file at runtime)
+- You are prototyping and do not want the overhead of `as const` everywhere

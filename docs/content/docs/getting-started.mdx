@@ -1,0 +1,165 @@
+---
+title: Getting Started
+description: Install drizzle-i18n, define a translatable schema, and run your first locale-aware query in under five minutes.
+---
+
+## How it works
+
+You define which columns are translatable. drizzle-i18n handles the rest -- schema generation, locale-aware queries, and write helpers. Query results are flat, just like any other Drizzle query:
+
+```ts
+const rows = await withTranslation(db, products, productI18n, { locale: "ar" });
+// => [{ id: 1, sku: "PHONE-42", price: 799, name: "هاتف ذكي", description: "هاتف رائد" }]
+//                                             ^^^^^^^^^^^^     ^^^^^^^^^^^^^
+//                                             plain strings, not JSON objects
+```
+
+No runtime i18n framework. No manual JOINs. No JSON parsing. Just translated values on your rows.
+
+## Install
+
+```bash
+npm i drizzle-i18n
+```
+
+`drizzle-orm >= 0.35.0` is required as a peer dependency. You also need one of the Drizzle dialect packages (`drizzle-orm/pg-core`, `drizzle-orm/mysql-core`, or `drizzle-orm/sqlite-core`).
+
+## Pick a dialect
+
+Every helper is exported from a dialect-specific entry point. Import from the one that matches your database:
+
+```ts
+// PostgreSQL
+import { translationTable, forLocale, withTranslation } from "drizzle-i18n/pg";
+
+// MySQL
+import { translationTable, forLocale, withTranslation } from "drizzle-i18n/mysql";
+
+// SQLite
+import { translationTable, forLocale, withTranslation } from "drizzle-i18n/sqlite";
+```
+
+All three entry points export the same set of helpers. The underlying SQL differs (e.g. `jsonb` vs `json` vs `text({ mode: "json" })`), but the API surface is identical.
+
+## Full example: translation table strategy
+
+This is a complete, copy-pasteable example for PostgreSQL. It defines a `products` table, generates a `products_translations` companion table, inserts a product with translations, and queries it back.
+
+### 1. Define the schema
+
+```ts
+// src/schema.ts
+import { pgTable, serial, text, integer } from "drizzle-orm/pg-core";
+import { translationTable } from "drizzle-i18n/pg";
+
+export const products = pgTable("products", {
+  id: serial("id").primaryKey(),
+  sku: text("sku").notNull(),
+  price: integer("price").notNull(),
+});
+
+// Generates a `products_translations` table with:
+//   id, product_id (FK), locale, name, description
+export const productI18n = translationTable(products, {
+  name: text("name").notNull(),
+  description: text("description"),
+});
+
+// Export the table and relations so Drizzle's relational API can use them
+export const productTranslations = productI18n.table;
+export const productTranslationsRelations = productI18n.translationsRelations;
+export const productsRelations = productI18n.parentRelations;
+```
+
+### 2. Insert a product with translations
+
+```ts
+import { insertWithTranslations } from "drizzle-i18n/pg";
+import { products, productI18n } from "./schema";
+
+const product = await insertWithTranslations(db, products, productI18n, {
+  values: { sku: "PHONE-42", price: 799 },
+  translations: {
+    en: { name: "Smartphone", description: "Flagship phone" },
+    ar: { name: "هاتف ذكي", description: "هاتف رائد" },
+    fr: { name: "Telephone", description: "Telephone phare" },
+  },
+});
+// => { sku: "PHONE-42", price: 799, id: 1 }
+```
+
+This runs inside a transaction -- if any translation insert fails, the parent row is rolled back too.
+
+### 3. Query a single locale
+
+```ts
+import { eq } from "drizzle-orm";
+import { withTranslation } from "drizzle-i18n/pg";
+
+const rows = await withTranslation(db, products, productI18n, {
+  locale: "ar",
+  fallback: "en",
+}).where(eq(products.id, 1));
+
+// => [{ id: 1, sku: "PHONE-42", price: 799, name: "هاتف ذكي", description: "هاتف رائد" }]
+```
+
+The result is flat -- `name` and `description` are scalar strings, not nested objects. If Arabic is missing for a row, the English fallback is used automatically.
+
+## Full example: JSON column strategy
+
+For entities with just a few translatable fields, JSON columns keep things compact.
+
+### 1. Define the schema
+
+```ts
+// src/schema.ts
+import { pgTable, serial, integer } from "drizzle-orm/pg-core";
+import { jsonTranslations } from "drizzle-i18n/pg";
+
+export const categories = pgTable("categories", {
+  id: serial("id").primaryKey(),
+  sortOrder: integer("sort_order"),
+  ...jsonTranslations({
+    name: { notNull: true },
+    description: {},
+  }),
+});
+```
+
+Each key in `jsonTranslations()` produces a column with that same name -- `name` and `description` here, not `name_i18n`. The column type is `jsonb` (PG), `json` (MySQL), or `text` in JSON mode (SQLite), typed as `Record<string, string>`.
+
+### 2. Insert a category
+
+```ts
+await db.insert(categories).values({
+  sortOrder: 1,
+  name: { en: "Electronics", ar: "إلكترونيات", fr: "Electronique" },
+  description: { en: "Gadgets and devices" },
+});
+```
+
+### 3. Read a single locale
+
+```ts
+import { forLocale } from "drizzle-i18n/pg";
+
+const rows = await db
+  .select({
+    id: categories.id,
+    name: forLocale(categories.name, "ar", { fallback: "en" }),
+  })
+  .from(categories);
+
+// => [{ id: 1, name: "إلكترونيات" }]
+```
+
+`forLocale()` returns a flat string value, not the full JSON object.
+
+## Next steps
+
+- [Translation Table](./translation-table) -- deep dive into schema generation, querying, and relational flattening
+- [JSON Columns](./json-columns) -- JSON strategy details, updates, and ordering
+- [Mutation Helpers](./mutation-helpers) -- all insert/update/upsert helpers for both strategies
+- [Strict Locales](./strict-locales) -- type-safe locale narrowing with `createI18n()`
+- [API Reference](./api-reference) -- complete function reference

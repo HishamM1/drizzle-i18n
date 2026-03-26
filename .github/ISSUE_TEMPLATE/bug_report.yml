@@ -1,0 +1,52 @@
+name: Bug Report
+description: Report a bug in drizzle-i18n
+labels: ["bug", "needs-triage"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened? What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction Steps
+      description: Minimal code or steps to reproduce the issue.
+    validations:
+      required: true
+  - type: dropdown
+    id: dialect
+    attributes:
+      label: Database Dialect
+      options:
+        - PostgreSQL
+        - MySQL
+        - SQLite
+    validations:
+      required: true
+  - type: dropdown
+    id: strategy
+    attributes:
+      label: Localization Strategy
+      options:
+        - Translation Table (separate table)
+        - JSON Column (inline)
+        - Both / Not sure
+    validations:
+      required: true
+  - type: input
+    id: drizzle-version
+    attributes:
+      label: drizzle-orm version
+      placeholder: "0.45.1"
+    validations:
+      required: true
+  - type: input
+    id: i18n-version
+    attributes:
+      label: drizzle-i18n version
+      placeholder: "0.1.0"
+    validations:
+      required: true

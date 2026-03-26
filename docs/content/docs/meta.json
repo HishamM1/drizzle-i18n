@@ -1,0 +1,15 @@
+{
+  "title": "Documentation",
+  "defaultOpen": true,
+  "pages": [
+    "index",
+    "getting-started",
+    "translation-table",
+    "json-columns",
+    "strict-locales",
+    "mutation-helpers",
+    "dialects",
+    "api-reference"
+  ]
+}
+

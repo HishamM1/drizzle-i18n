@@ -1,0 +1,146 @@
+---
+title: Translation Table
+description: Generate a companion translations table and query localized rows with JOINs, relational loading, and fallback support.
+---
+
+The translation table strategy creates a separate `{entity}_translations` table with one row per entity per locale. This is the right choice when you have many translatable fields, need missing-translation reporting, or prefer normalized schemas with proper foreign keys.
+
+## Generate the schema
+
+`translationTable()` takes your parent table and a set of translatable columns. It returns the generated table, Drizzle relations, and metadata used by all other helpers.
+
+```ts
+import { pgTable, serial, integer, text } from "drizzle-orm/pg-core";
+import { translationTable } from "drizzle-i18n/pg";
+
+export const products = pgTable("products", {
+  id: serial("id").primaryKey(),
+  sku: text("sku").notNull(),
+  price: integer("price").notNull(),
+});
+
+export const productI18n = translationTable(products, {
+  name: text("name").notNull(),
+  description: text("description"),
+});
+```
+
+The generated `products_translations` table contains:
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | serial | Auto-increment primary key |
+| `product_id` | integer | FK to `products.id`, derived from the parent table name |
+| `locale` | varchar(10) | Locale identifier (e.g. `"en"`, `"ar"`, `"pt-BR"`) |
+| `name` | text | Translatable field (NOT NULL) |
+| `description` | text | Translatable field (nullable) |
+
+A unique constraint on `(product_id, locale)` is added automatically, which enables upsert-on-conflict behavior in the mutation helpers.
+
+### Export for Drizzle's relational API
+
+To use `db.query.products.findMany({ with: { translations: true } })`, you need to register the relations:
+
+```ts
+export const productTranslations = productI18n.table;
+export const productTranslationsRelations = productI18n.translationsRelations;
+export const productsRelations = productI18n.parentRelations;
+```
+
+If you already have relations defined on your parent table and need to merge them, use `parentRelationConfig` instead:
+
+```ts
+import { relations } from "drizzle-orm";
+
+export const productsRelations = relations(products, (helpers) => ({
+  ...productI18n.parentRelationConfig(helpers),
+  category: helpers.one(categories, {
+    fields: [products.categoryId],
+    references: [categories.id],
+  }),
+}));
+```
+
+### Customization options
+
+```ts
+const productI18n = translationTable(products, columns, {
+  tableName: "product_locales",       // default: `${parentName}_translations`
+  parentIdColumn: "prod_id",          // default: `${singularParentName}_id`
+  localeColumn: "lang",               // default: "locale"
+  localeLength: 5,                    // default: 10
+});
+```
+
+## Query a locale with JOIN
+
+`withTranslation()` builds a LEFT JOIN query that merges translatable columns onto each parent row. The locale predicate is in the JOIN condition (not WHERE), so parent rows still appear even when a translation is missing -- translatable fields will be `null`.
+
+```ts
+import { eq } from "drizzle-orm";
+import { withTranslation } from "drizzle-i18n/pg";
+
+const rows = await withTranslation(db, products, productI18n, {
+  locale: "ar",
+  fallback: "en",
+}).where(eq(products.sku, "PHONE-42"));
+
+// => [{ id: 1, sku: "PHONE-42", price: 799, name: "هاتف ذكي", description: "هاتف رائد" }]
+```
+
+The result is flat -- `name` and `description` are scalar strings, not nested objects. This is similar to how Laravel's translation trait works.
+
+When a `fallback` is provided, two LEFT JOINs are used (one for the requested locale, one for the fallback), and each translatable field is wrapped in `COALESCE`.
+
+### Without fallback
+
+```ts
+const rows = await withTranslation(db, products, productI18n, {
+  locale: "fr",
+});
+// If no French translation exists: name and description will be null
+// => [{ id: 1, sku: "PHONE-42", price: 799, name: null, description: null }]
+```
+
+## Flatten relational query results
+
+If you prefer Drizzle's relational API (`db.query`), use `localizeResults()` to post-process the nested `translations` array into flat fields:
+
+```ts
+import { localizeResults } from "drizzle-i18n/pg";
+
+const rows = await db.query.products.findMany({
+  with: { translations: true },
+});
+// rows[0] => { id: 1, sku: "PHONE-42", price: 799, translations: [{ locale: "en", name: "Smartphone", ... }, ...] }
+
+const localized = localizeResults(rows, productI18n, {
+  locale: "ar",
+  fallback: "en",
+});
+// localized[0] => { id: 1, sku: "PHONE-42", price: 799, name: "هاتف ذكي", description: "هاتف رائد" }
+```
+
+The `translations` array is removed from each row, and the matching locale's fields are lifted to the top level.
+
+If your relation key is not `"translations"`, pass `relationKey`:
+
+```ts
+const localized = localizeResults(rows, productI18n, {
+  locale: "ar",
+  relationKey: "locales",
+});
+```
+
+## Find missing translations
+
+`missingTranslations()` returns parent rows that have no translation for a given locale. It uses a LEFT JOIN with IS NULL -- no subqueries.
+
+```ts
+import { missingTranslations } from "drizzle-i18n/pg";
+
+const missing = await missingTranslations(db, products, productI18n, "fr");
+// => [{ id: 3, sku: "CABLE-01", price: 15 }, { id: 7, sku: "CASE-99", price: 29 }]
+```
+
+This is useful for building admin dashboards that show translation coverage, or for CI checks that flag untranslated content.

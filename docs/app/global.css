@@ -1,0 +1,11 @@
+@import 'tailwindcss';
+@import 'fumadocs-ui/css/neutral.css';
+@import 'fumadocs-ui/css/preset.css';
+
+:root {
+  --docs-shell: radial-gradient(circle at top, color-mix(in srgb, var(--color-blue-500) 18%, transparent), transparent 38%);
+}
+
+body {
+  background-image: var(--docs-shell);
+}

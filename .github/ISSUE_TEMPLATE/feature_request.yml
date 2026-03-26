@@ -1,0 +1,26 @@
+name: Feature Request
+description: Suggest a new feature or improvement
+labels: ["feature", "needs-triage"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What feature would you like and why?
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-api
+    attributes:
+      label: Proposed API
+      description: How would you expect this to work? Show example code if possible.
+    validations:
+      required: false
+  - type: checkboxes
+    id: dialects
+    attributes:
+      label: Affected Dialects
+      options:
+        - label: PostgreSQL
+        - label: MySQL
+        - label: SQLite

@@ -1,0 +1,372 @@
+---
+title: API Reference
+description: Complete reference for all exported helpers across both localization strategies.
+---
+
+All functions below are exported from each dialect entry point (`drizzle-i18n/pg`, `drizzle-i18n/mysql`, `drizzle-i18n/sqlite`) unless noted otherwise.
+
+## Schema helpers
+
+### translationTable(parent, columns, opts?)
+
+**Strategy:** Separate table
+
+Generates a companion translations table, a unique constraint on `(parentId, locale)`, and Drizzle relations for both directions.
+
+```ts
+const productI18n = translationTable(products, {
+  name: text("name").notNull(),
+  description: text("description"),
+});
+```
+
+**Parameters:**
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `parent` | Drizzle table | The parent table to generate translations for |
+| `columns` | Column builder map | Translatable columns (same syntax as `pgTable` columns) |
+| `opts.tableName` | `string` | Override table name (default: `${parentName}_translations`) |
+| `opts.parentIdColumn` | `string` | Override FK column name (default: `${singularParentName}_id`) |
+| `opts.localeColumn` | `string` | Override locale column name (default: `"locale"`) |
+| `opts.localeLength` | `number` | Max length for locale varchar (default: `10`) |
+
+**Returns:** An object with:
+
+| Property | Description |
+| --- | --- |
+| `.table` | The generated translations table |
+| `.translationsRelations` | Relations for the translations table (many-to-one back to parent) |
+| `.parentRelations` | Relations for the parent table (one-to-many to translations) |
+| `.parentRelationConfig` | A function you can spread into an existing `relations()` call |
+| `.translatableColumnNames` | Array of column name strings |
+| `.fkColumn` | Reference to the FK column on the translations table |
+| `.localeColumn` | Reference to the locale column on the translations table |
+| `.localeColumnName` | The locale column name string |
+
+---
+
+### jsonTranslations(fields)
+
+**Strategy:** JSON column
+
+Generates locale-map columns to spread into a table definition. Each key produces a column with that same name (no suffix).
+
+```ts
+const categories = pgTable("categories", {
+  id: serial("id").primaryKey(),
+  ...jsonTranslations({
+    name: { notNull: true },
+    description: {},
+  }),
+});
+```
+
+**Parameters:**
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `fields` | `Record<string, { notNull?: boolean }>` | Map of field names to options |
+
+**Returns:** An object of Drizzle column builders typed as `Record<string, string>`, ready to spread.
+
+---
+
+## Query helpers
+
+### forLocale(column, locale, opts?)
+
+**Strategy:** JSON column
+
+Extracts a single locale value from a JSON locale-map column. Returns a flat `SQL<string | null>` expression, not the full JSON object.
+
+```ts
+db.select({
+  name: forLocale(categories.name, "ar", { fallback: "en" }),
+}).from(categories);
+```
+
+**Parameters:**
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `column` | Drizzle column | A JSON locale-map column |
+| `locale` | `string` | The locale to extract |
+| `opts.fallback` | `string` | Fallback locale if primary is missing |
+
+---
+
+### withTranslation(db, parent, i18nResult, opts)
+
+**Strategy:** Separate table
+
+Builds a locale-aware LEFT JOIN query. The locale predicate is in the ON clause, so parent rows always appear (translatable fields are null when missing).
+
+```ts
+const rows = await withTranslation(db, products, productI18n, {
+  locale: "ar",
+  fallback: "en",
+}).where(eq(products.id, 1));
+```
+
+Returns flat rows with scalar translatable fields. Chainable -- call `.where()`, `.limit()`, `.orderBy()`, etc. on the result.
+
+**Parameters:**
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `db` | Drizzle DB instance | Your database connection |
+| `parent` | Drizzle table | The parent table |
+| `i18nResult` | Return value of `translationTable()` | Translation table metadata |
+| `opts.locale` | `string` | The locale to load |
+| `opts.fallback` | `string` | Fallback locale (adds a second LEFT JOIN with COALESCE) |
+
+---
+
+### localizeResults(rows, i18nResult, opts)
+
+**Strategy:** Separate table
+
+Post-processes relational query results (from `db.query` with `with: { translations: true }`). Removes the `translations` array and lifts the matching locale's fields to the top level.
+
+```ts
+const rows = await db.query.products.findMany({ with: { translations: true } });
+const localized = localizeResults(rows, productI18n, { locale: "fr", fallback: "en" });
+```
+
+**Parameters:**
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `rows` | Array of relational query results | Must include the translations relation |
+| `i18nResult` | Return value of `translationTable()` | Translation table metadata |
+| `opts.locale` | `string` | The locale to pick |
+| `opts.fallback` | `string` | Fallback locale |
+| `opts.relationKey` | `string` | Override the relation key name (default: `"translations"`) |
+
+---
+
+### missingTranslations(db, parent, i18nResult, locale)
+
+**Strategy:** Separate table
+
+Returns parent rows that have no translation for the given locale. Uses LEFT JOIN + IS NULL.
+
+```ts
+const missing = await missingTranslations(db, products, productI18n, "fr");
+```
+
+**Parameters:**
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `db` | Drizzle DB instance | Your database connection |
+| `parent` | Drizzle table | The parent table |
+| `i18nResult` | Return value of `translationTable()` | Translation table metadata |
+| `locale` | `string` | The locale to check for |
+
+---
+
+### orderByLocale(column, locale, direction?)
+
+**Strategy:** JSON column
+
+Generates an ORDER BY expression that sorts by a specific locale's value within a JSON column.
+
+```ts
+db.select().from(categories).orderBy(orderByLocale(categories.name, "en"));
+db.select().from(categories).orderBy(orderByLocale(categories.name, "en", "desc"));
+```
+
+**Parameters:**
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `column` | Drizzle column | A JSON locale-map column |
+| `locale` | `string` | The locale to sort by |
+| `direction` | `"asc" \| "desc"` | Sort direction (default: `"asc"`) |
+
+---
+
+## Mutation helpers
+
+### insertWithTranslations(db, parent, i18nResult, data)
+
+**Strategy:** Separate table
+
+Inserts a parent row and its translation rows in a single transaction. If any insert fails, the entire operation is rolled back.
+
+```ts
+const product = await insertWithTranslations(db, products, productI18n, {
+  values: { sku: "MUG-01", price: 15 },
+  translations: {
+    en: { name: "Mug", description: "Ceramic mug" },
+    ar: { name: "كوب", description: "كوب سيراميك" },
+  },
+});
+```
+
+**Parameters:**
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `db` | Drizzle DB instance | Your database connection |
+| `parent` | Drizzle table | The parent table |
+| `i18nResult` | Return value of `translationTable()` | Translation table metadata |
+| `data.values` | `Record<string, any>` | Parent row fields |
+| `data.translations` | `Record<string, Record<string, any>>` | Locale-keyed translation fields |
+
+**Returns:** The inserted parent row values including the generated primary key.
+
+---
+
+### upsertTranslation(db, i18nResult, data)
+
+**Strategy:** Separate table
+
+Inserts or updates a single locale row using ON CONFLICT DO UPDATE on the `(parentId, locale)` unique constraint.
+
+```ts
+await upsertTranslation(db, productI18n, {
+  product_id: 1,
+  locale: "fr",
+  name: "Telephone",
+});
+```
+
+**Parameters:**
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `db` | Drizzle DB instance | Your database connection |
+| `i18nResult` | Return value of `translationTable()` | Translation table metadata |
+| `data` | `Record<string, any>` | Row data including FK, locale, and translatable fields |
+
+---
+
+### setTranslations(db, i18nResult, data)
+
+**Strategy:** Separate table
+
+Upserts translation rows for multiple locales at once. Only the provided locales are written. Within each locale, only the provided columns are included in the upsert SET clause -- omitted fields are not set to NULL.
+
+```ts
+await setTranslations(db, productI18n, {
+  product_id: 1,
+  translations: {
+    en: { name: "Smartphone Pro" },
+    fr: { name: "Telephone Pro", description: "Description en francais" },
+  },
+});
+```
+
+**Parameters:**
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `db` | Drizzle DB instance | Your database connection |
+| `i18nResult` | Return value of `translationTable()` | Translation table metadata |
+| `data[fkKey]` | FK value | The parent entity ID |
+| `data.translations` | `Record<string, Record<string, any>>` | Locale-keyed fields to upsert |
+
+---
+
+### updateLocale(db, table, column, opts)
+
+**Strategy:** JSON column
+
+Patches a single locale key inside a JSON column using the database's native JSON set function. Other locale keys are untouched. Handles NULL columns by coalescing with an empty object.
+
+```ts
+await updateLocale(db, categories, categories.name, {
+  where: eq(categories.id, 1),
+  locale: "es",
+  value: "Electronica",
+});
+```
+
+**Parameters:**
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `db` | Drizzle DB instance | Your database connection |
+| `table` | Drizzle table | The table containing the JSON column |
+| `column` | Drizzle column | The JSON locale-map column to update |
+| `opts.where` | `SQL` | A Drizzle where clause |
+| `opts.locale` | `string` | The locale key to set |
+| `opts.value` | `string` | The translated string value |
+
+---
+
+## Batch helpers
+
+### exportTranslations(rows, i18nResult, fkKey, localeKey?)
+
+**Strategy:** Separate table
+
+Converts flat translation table rows into a grouped format keyed by parent ID and locale.
+
+```ts
+const rows = await db.select().from(productI18n.table);
+const exported = exportTranslations(rows, productI18n, "product_id");
+// => { 1: { en: { name: "Phone" }, ar: { name: "هاتف" } } }
+```
+
+**Parameters:**
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `rows` | Array of translation rows | Raw rows from the translations table |
+| `i18nResult` | Return value of `translationTable()` | Used to determine which columns are translatable |
+| `fkKey` | `string` | The FK column name in the row data |
+| `localeKey` | `string` | The locale column name in the row data (default: `"locale"`) |
+
+---
+
+### importTranslations(data, fkKey, localeKey?)
+
+**Strategy:** Separate table
+
+The inverse of `exportTranslations()`. Converts a grouped locale-keyed format into flat rows for bulk insert.
+
+```ts
+const data = { 1: { en: { name: "Phone" }, ar: { name: "هاتف" } } };
+const rows = importTranslations(data, "product_id");
+await db.insert(productI18n.table).values(rows);
+```
+
+**Parameters:**
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `data` | `Record<string \| number, Record<string, Record<string, any>>>` | Grouped translations |
+| `fkKey` | `string` | The FK column name to include in each row |
+| `localeKey` | `string` | The locale column name to include in each row (default: `"locale"`) |
+
+---
+
+## Factory
+
+### createI18n(config)
+
+**Strategy:** Both
+
+Creates a locale-scoped wrapper object that re-exports all helpers with strict locale typing. See [Strict Locales](./strict-locales) for full details.
+
+```ts
+const i18n = createI18n({
+  defaultLocale: "en",
+  locales: ["en", "ar", "fr"] as const,
+  strict: true,
+});
+```
+
+**Parameters:**
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `config.defaultLocale` | `string` | The required locale (must be in `locales`) |
+| `config.locales` | `readonly string[]` | All supported locales (use `as const` for type narrowing) |
+| `config.strict` | `boolean` | If true, throws at runtime for unknown locales |
+
+**Returns:** An object with all helpers (`translationTable`, `jsonTranslations`, `forLocale`, `withTranslation`, `localizeResults`, `upsertTranslation`, `setTranslations`, `updateLocale`, `insertWithTranslations`) -- each with locale parameters narrowed to the configured union.

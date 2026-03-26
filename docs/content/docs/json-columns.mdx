@@ -1,0 +1,136 @@
+---
+title: JSON Columns
+description: Store locale maps directly on the parent row and read, update, or sort by one locale at a time.
+---
+
+The JSON column strategy stores translations as inline `Record<string, string>` locale maps on the parent row. This avoids a second table and is a good fit for entities with only a few translatable fields -- think category names, tag labels, or status descriptions.
+
+## Define locale-map columns
+
+`jsonTranslations()` generates columns you spread into your table definition. Each key produces a column with that **same name** -- `name` and `description` here, not `name_i18n` or any other suffix.
+
+```ts
+import { pgTable, serial, integer } from "drizzle-orm/pg-core";
+import { jsonTranslations } from "drizzle-i18n/pg";
+
+export const categories = pgTable("categories", {
+  id: serial("id").primaryKey(),
+  sortOrder: integer("sort_order"),
+  ...jsonTranslations({
+    name: { notNull: true },
+    description: {},
+  }),
+});
+```
+
+The underlying column type depends on the dialect:
+
+| Dialect | Column type |
+| --- | --- |
+| PostgreSQL | `jsonb` |
+| MySQL | `json` |
+| SQLite | `text({ mode: "json" })` |
+
+All columns are typed as `Record<string, string>` for `$inferSelect` and `$inferInsert`, so you insert locale maps directly:
+
+```ts
+await db.insert(categories).values({
+  sortOrder: 1,
+  name: { en: "Electronics", ar: "إلكترونيات", fr: "Electronique" },
+  description: { en: "Gadgets and devices" },
+});
+```
+
+## Read a single locale
+
+`forLocale()` extracts one locale's value from a JSON column as a flat string. It uses the database's native JSON operator (`->>` on PG, `JSON_EXTRACT` on MySQL, `json_extract` on SQLite).
+
+```ts
+import { forLocale } from "drizzle-i18n/pg";
+
+const rows = await db
+  .select({
+    id: categories.id,
+    name: forLocale(categories.name, "ar", { fallback: "en" }),
+    description: forLocale(categories.description, "ar", { fallback: "en" }),
+  })
+  .from(categories);
+
+// => [{ id: 1, name: "إلكترونيات", description: "Gadgets and devices" }]
+```
+
+The return value is a scalar `string | null`, not a JSON object. When `fallback` is provided, it wraps the extraction in `COALESCE` -- if the requested locale key is missing, the fallback locale is tried before returning null.
+
+### Without fallback
+
+```ts
+const rows = await db
+  .select({
+    id: categories.id,
+    name: forLocale(categories.name, "de"),
+  })
+  .from(categories);
+
+// If no German key exists: name is null
+// => [{ id: 1, name: null }]
+```
+
+## Update one locale in place
+
+`updateLocale()` patches a single locale key inside a JSON column without touching other locales. It uses `jsonb_set` (PG), `JSON_SET` (MySQL), or `json_set` (SQLite) with `COALESCE` to handle the case where the column is currently NULL.
+
+```ts
+import { eq } from "drizzle-orm";
+import { updateLocale } from "drizzle-i18n/pg";
+
+await updateLocale(db, categories, categories.name, {
+  where: eq(categories.id, 1),
+  locale: "fr",
+  value: "Electronique",
+});
+```
+
+After this call, the `name` column for category 1 looks like:
+
+```json
+{ "en": "Electronics", "ar": "إلكترونيات", "fr": "Electronique" }
+```
+
+Only the `"fr"` key was set -- `"en"` and `"ar"` are untouched.
+
+## Sort by a translated value
+
+`orderByLocale()` generates an `ORDER BY` expression that extracts a locale key from a JSON column and sorts by it. This is useful for listing categories, tags, or other entities alphabetically in the user's language.
+
+```ts
+import { orderByLocale } from "drizzle-i18n/pg";
+
+const rows = await db
+  .select()
+  .from(categories)
+  .orderBy(orderByLocale(categories.name, "en"));
+
+// Sorted alphabetically by English name
+```
+
+You can also sort in descending order:
+
+```ts
+.orderBy(orderByLocale(categories.name, "en", "desc"))
+```
+
+## When to use JSON columns vs translation tables
+
+JSON columns work well when:
+
+- The entity has only a few translatable fields (1-3)
+- You do not need to report on missing translations
+- You rarely need to query "all entities with a French name" without also loading the parent
+- Fewer tables and no JOINs are a priority
+
+Consider switching to a [translation table](./translation-table) when:
+
+- You have many translatable fields per entity
+- You need `missingTranslations()` for coverage dashboards
+- You want proper relational constraints and indexing on translated content
+- Sorting or filtering by translated values is performance-critical (indexed columns beat JSON extraction)

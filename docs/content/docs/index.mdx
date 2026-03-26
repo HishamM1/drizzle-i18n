@@ -1,0 +1,66 @@
+---
+title: Overview
+description: Learn the two localization strategies supported by drizzle-i18n and when each one fits best.
+---
+
+# drizzle-i18n
+
+`drizzle-i18n` is a type-safe database localization layer for [Drizzle ORM](https://orm.drizzle.team/).
+It lets you store and query translated content without leaving the Drizzle ecosystem -- no runtime i18n framework needed, no manual SQL for locale lookups.
+
+It supports two strategies for modeling translated content:
+
+- **Translation table** -- a separate `{entity}_translations` table with one row per locale
+- **JSON columns** -- inline `Record<string, string>` locale maps stored directly on the parent row
+
+Both strategies ship with query helpers that return **flat scalar values** (not nested JSON), so your application code reads like any other Drizzle query.
+
+## What you get
+
+- **Schema helpers** for PostgreSQL, MySQL, and SQLite (one import path per dialect)
+- **Locale-aware queries** -- `withTranslation()` for JOINs, `forLocale()` for JSON extraction, both with fallback support
+- **Mutation helpers** -- atomic `insertWithTranslations()`, safe `setTranslations()` (partial upserts), single-locale `upsertTranslation()`, and JSON `updateLocale()`
+- **Reporting and ordering** -- `missingTranslations()` finds gaps, `orderByLocale()` sorts by translated values
+- **Batch I/O** -- `exportTranslations()` and `importTranslations()` for seeding, migration, or CMS sync
+- **Strict locale typing** -- `createI18n()` with `as const` narrows every helper to your exact locale union and optionally validates at runtime
+
+## Choose a strategy
+
+### Translation table
+
+Best when you need:
+
+- Relational joins and Drizzle's `with: { translations: true }` eager loading
+- Missing-translation reporting (`missingTranslations()`)
+- Clean separation between non-translatable fields (SKU, price) and translatable fields (name, description)
+- Many translatable columns per entity -- each gets its own real database column with indexing, constraints, and type safety
+
+Trade-offs: more tables, more JOINs, slightly more complex schema setup.
+
+### JSON columns
+
+Best when you need:
+
+- Fewer tables -- translations live on the parent row
+- Simple per-locale reads with `forLocale()` and updates with `updateLocale()`
+- Entities with only one or two translatable fields (e.g. a `categories` table with just `name`)
+
+Trade-offs: no foreign keys on translations, harder to query "which entities are missing French?", JSON operators vary by dialect.
+
+### Quick comparison
+
+| Concern | Translation table | JSON columns |
+| --- | --- | --- |
+| Tables created | Parent + `_translations` | Parent only |
+| Locale read | LEFT JOIN via `withTranslation()` | JSON extract via `forLocale()` |
+| Missing-locale report | `missingTranslations()` | Not available |
+| Partial update safety | `setTranslations()` only touches provided locales | `updateLocale()` patches one key |
+| Ordering by locale | Standard `ORDER BY` on joined column | `orderByLocale()` on JSON column |
+
+## Start here
+
+<Cards>
+  <Card title="Getting started" href="./getting-started" />
+  <Card title="Translation table" href="./translation-table" />
+  <Card title="JSON columns" href="./json-columns" />
+</Cards>

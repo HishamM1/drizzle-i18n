@@ -1,0 +1,113 @@
+---
+title: Dialects
+description: PostgreSQL, MySQL, and SQLite are all supported with identical APIs and dialect-appropriate SQL under the hood.
+---
+
+drizzle-i18n supports all three database dialects that Drizzle ORM supports. The API surface is identical across dialects -- the same function names, the same parameter shapes, the same return types. The differences are limited to the SQL generated under the hood.
+
+## Import paths
+
+| Dialect | Import path | Drizzle schema package |
+| --- | --- | --- |
+| PostgreSQL | `drizzle-i18n/pg` | `drizzle-orm/pg-core` |
+| MySQL | `drizzle-i18n/mysql` | `drizzle-orm/mysql-core` |
+| SQLite | `drizzle-i18n/sqlite` | `drizzle-orm/sqlite-core` |
+
+Always import from the entry point that matches your Drizzle schema. Mixing imports (e.g. using `drizzle-i18n/pg` helpers with a MySQL table) will produce incorrect SQL.
+
+## JSON storage differences
+
+The main dialect-specific behavior is how JSON locale maps are stored and queried:
+
+| Dialect | Column type | Read operator | Write function |
+| --- | --- | --- | --- |
+| PostgreSQL | `jsonb` | `column->>'key'` | `jsonb_set()` |
+| MySQL | `json` | `JSON_EXTRACT(column, '$.key')` | `JSON_SET()` |
+| SQLite | `text({ mode: "json" })` | `json_extract(column, '$.key')` | `json_set()` |
+
+PostgreSQL's `jsonb` is a binary format with indexing support (GIN indexes). MySQL's `json` is a native type with its own optimizer hints. SQLite stores JSON as plain text but provides `json_extract` and `json_set` functions.
+
+These differences are handled automatically -- `forLocale()`, `updateLocale()`, and `orderByLocale()` emit the correct SQL for each dialect.
+
+## What every dialect exports
+
+Each entry point exports the full set of helpers:
+
+**Schema helpers:**
+- `translationTable()` -- generate a companion translations table
+- `jsonTranslations()` -- generate inline JSON locale-map columns
+
+**Query helpers:**
+- `forLocale()` -- extract a single locale from a JSON column
+- `withTranslation()` -- locale-aware LEFT JOIN query builder
+- `localizeResults()` -- post-process relational query results
+- `missingTranslations()` -- find entities missing a locale
+- `orderByLocale()` -- ORDER BY a JSON column's locale value
+
+**Mutation helpers:**
+- `upsertTranslation()` -- insert or update one locale row
+- `setTranslations()` -- bulk upsert multiple locales
+- `insertWithTranslations()` -- atomic parent + translations insert
+- `updateLocale()` -- patch one locale key in a JSON column
+
+**Batch helpers:**
+- `exportTranslations()` -- convert rows to grouped locale format
+- `importTranslations()` -- convert grouped locale format to rows
+
+**Factory:**
+- `createI18n()` -- locale-scoped wrapper with strict typing
+
+## Dialect-specific examples
+
+### PostgreSQL
+
+```ts
+import { pgTable, serial, text, integer } from "drizzle-orm/pg-core";
+import { translationTable, jsonTranslations } from "drizzle-i18n/pg";
+
+const posts = pgTable("posts", {
+  id: serial("id").primaryKey(),
+  slug: text("slug").notNull(),
+});
+
+const postI18n = translationTable(posts, {
+  title: text("title").notNull(),
+  body: text("body"),
+});
+```
+
+### MySQL
+
+```ts
+import { mysqlTable, serial, varchar, text } from "drizzle-orm/mysql-core";
+import { translationTable, jsonTranslations } from "drizzle-i18n/mysql";
+
+const posts = mysqlTable("posts", {
+  id: serial("id").primaryKey(),
+  slug: varchar("slug", { length: 255 }).notNull(),
+});
+
+const postI18n = translationTable(posts, {
+  title: varchar("title", { length: 255 }).notNull(),
+  body: text("body"),
+});
+```
+
+### SQLite
+
+```ts
+import { sqliteTable, integer, text } from "drizzle-orm/sqlite-core";
+import { translationTable, jsonTranslations } from "drizzle-i18n/sqlite";
+
+const posts = sqliteTable("posts", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  slug: text("slug").notNull(),
+});
+
+const postI18n = translationTable(posts, {
+  title: text("title").notNull(),
+  body: text("body"),
+});
+```
+
+All three produce the same logical schema (a `posts_translations` table with `post_id`, `locale`, `title`, and `body`) and work with the same query and mutation helpers.
