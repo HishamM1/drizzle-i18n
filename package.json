@@ -2,6 +2,14 @@
   "name": "drizzle-i18n",
   "version": "0.1.0",
   "description": "Type-safe database localization layer for Drizzle ORM",
+  "homepage": "https://github.com/HishamM1/drizzle-i18n#readme",
+  "bugs": {
+    "url": "https://github.com/HishamM1/drizzle-i18n/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HishamM1/drizzle-i18n.git"
+  },
   "sideEffects": false,
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
