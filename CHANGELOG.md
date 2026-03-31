@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1
+
+### Patch Changes
+
+- fix: sqlite insertWithTranslations now works with both sync (better-sqlite3) and async (libsql/turso) drivers
+
 All notable changes to this project will be documented in this file.
 
 ## 0.1.0 - 2026-03-25

@@ -115,7 +115,7 @@ export async function updateLocale(
 /**
  * Insert a parent row and its translations in one call (SQLite).
  * Wrapped in a transaction — if translation insert fails, the parent insert is rolled back.
- * Works with both sync (better-sqlite3) and async (libsql) drivers via `await`.
+ * Works with both sync (better-sqlite3) and async (libsql/turso) drivers.
  *
  * @example
  * await insertWithTranslations(db, products, productI18n, {
@@ -147,16 +147,8 @@ export function insertWithTranslations(
   const localeKeyName = i18nResult.localeColumn.name;
   const allowedCols = new Set(i18nResult.translatableColumnNames);
 
-  return db.transaction((tx: any) => {
-    const [inserted] = tx
-      .insert(parent)
-      .values(data.values)
-      .returning({ pk: (parent as any)[pkKey] })
-      .all();
-
-    const pkValue = inserted.pk;
-
-    const rows = Object.entries(data.translations).map(([locale, fields]) => {
+  function buildTranslationRows(pkValue: any) {
+    return Object.entries(data.translations).map(([locale, fields]) => {
       const filtered: Record<string, any> = {};
       for (const [k, v] of Object.entries(fields)) {
         if (allowedCols.has(k)) filtered[k] = v;
@@ -167,11 +159,34 @@ export function insertWithTranslations(
         ...filtered,
       };
     });
+  }
 
-    if (rows.length > 0) {
-      tx.insert(i18nResult.table).values(rows).run();
+  return db.transaction((tx: any) => {
+    const insertResult = tx
+      .insert(parent)
+      .values(data.values)
+      .returning({ pk: (parent as any)[pkKey] });
+
+    if (insertResult && typeof insertResult.then === "function") {
+      return insertResult.then((rows: any[]) => {
+        const pkValue = rows[0].pk;
+        const translationRows = buildTranslationRows(pkValue);
+        if (translationRows.length > 0) {
+          return tx
+            .insert(i18nResult.table)
+            .values(translationRows)
+            .then(() => ({ ...data.values, [pkKey]: pkValue }));
+        }
+        return { ...data.values, [pkKey]: pkValue };
+      });
     }
 
+    const inserted = insertResult[0];
+    const pkValue = inserted.pk;
+    const translationRows = buildTranslationRows(pkValue);
+    if (translationRows.length > 0) {
+      tx.insert(i18nResult.table).values(translationRows).run();
+    }
     return { ...data.values, [pkKey]: pkValue };
   });
 }
