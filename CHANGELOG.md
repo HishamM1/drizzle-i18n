@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0
+
+### Minor Changes
+
+- dee2dc5: Expand the `createI18n()` factory surface to include all documented helpers, add strict locale validation for the new factory wrappers, tighten translation mutation payload typing, and fix SQLite sync transaction handling in `insertWithTranslations()`.
+
+  Also adds executable SQLite integration coverage for locale extraction, fallback joins, missing translation lookup, mutation helpers, JSON locale updates, and transaction rollback behavior.
+
 ## 0.1.1
 
 ### Patch Changes
