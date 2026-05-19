@@ -1,21 +1,26 @@
 import type { SQL } from "drizzle-orm";
 import { getTableColumns, sql } from "drizzle-orm";
 import type { PgColumn, PgTable } from "drizzle-orm/pg-core";
+import type {
+  InsertWithTranslationsData,
+  SetTranslationsData,
+  TranslationRowData,
+} from "../core/types.js";
 import { escapePgArrayKey, findPrimaryKey } from "../core/utils.js";
 
 /**
  * Upsert a single locale row in a translation table (PG).
  * Uses ON CONFLICT (fk, locale) DO UPDATE SET ... for all translatable columns.
  */
-export async function upsertTranslation(
+export async function upsertTranslation<TColumnName extends string = string>(
   db: any,
   i18nResult: {
     table: PgTable;
     fkColumn: any;
     localeColumn: any;
-    translatableColumnNames: string[];
+    translatableColumnNames: TColumnName[];
   },
-  data: Record<string, any>,
+  data: TranslationRowData<NoInfer<TColumnName>>,
 ) {
   const { table, fkColumn, localeColumn, translatableColumnNames } = i18nResult;
 
@@ -40,18 +45,15 @@ export async function upsertTranslation(
  * Bulk upsert translations for multiple locales at once (PG).
  * Only the provided locales are written — others are untouched.
  */
-export async function setTranslations(
+export async function setTranslations<TColumnName extends string = string>(
   db: any,
   i18nResult: {
     table: PgTable;
     fkColumn: any;
     localeColumn: any;
-    translatableColumnNames: string[];
+    translatableColumnNames: TColumnName[];
   },
-  data: {
-    [key: string]: any;
-    translations: Record<string, Record<string, any>>;
-  },
+  data: SetTranslationsData<NoInfer<TColumnName>>,
 ) {
   const { table, fkColumn, localeColumn, translatableColumnNames } = i18nResult;
   const fkKeyName = fkColumn.name;
@@ -62,7 +64,9 @@ export async function setTranslations(
 
   const results = [];
   for (const [locale, fields] of Object.entries(data.translations)) {
-    const colsInThisLocale = Object.keys(fields).filter((k) => translatableColumnNames.includes(k));
+    const colsInThisLocale = Object.keys(fields).filter((k) =>
+      translatableColumnNames.includes(k as TColumnName),
+    );
     if (colsInThisLocale.length === 0) continue;
 
     const setCols: Record<string, any> = {};
@@ -128,26 +132,23 @@ export async function updateLocale(
  *   },
  * });
  */
-export async function insertWithTranslations(
+export async function insertWithTranslations<TColumnName extends string = string>(
   db: any,
   parent: PgTable,
   i18nResult: {
     table: PgTable;
     fkColumn: any;
     localeColumn: any;
-    translatableColumnNames: string[];
+    translatableColumnNames: TColumnName[];
   },
-  data: {
-    values: Record<string, any>;
-    translations: Record<string, Record<string, any>>;
-  },
+  data: InsertWithTranslationsData<NoInfer<TColumnName>>,
 ) {
   const parentCols = getTableColumns(parent);
   const pk = findPrimaryKey(parentCols);
   const pkKey = pk.key;
   const fkKeyName = i18nResult.fkColumn.name;
   const localeKeyName = i18nResult.localeColumn.name;
-  const allowedCols = new Set(i18nResult.translatableColumnNames);
+  const allowedCols = new Set<string>(i18nResult.translatableColumnNames);
 
   return db.transaction(async (tx: any) => {
     const [inserted] = await tx

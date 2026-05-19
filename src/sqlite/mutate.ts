@@ -1,21 +1,26 @@
 import type { SQL } from "drizzle-orm";
 import { getTableColumns, sql } from "drizzle-orm";
 import type { SQLiteColumn, SQLiteTable } from "drizzle-orm/sqlite-core";
+import type {
+  InsertWithTranslationsData,
+  SetTranslationsData,
+  TranslationRowData,
+} from "../core/types.js";
 import { escapeJsonKey, findPrimaryKey } from "../core/utils.js";
 
 /**
  * Upsert a single locale row in a translation table (SQLite).
  * Uses ON CONFLICT (fk, locale) DO UPDATE SET ... (same syntax as PG).
  */
-export async function upsertTranslation(
+export async function upsertTranslation<TColumnName extends string = string>(
   db: any,
   i18nResult: {
     table: SQLiteTable;
     fkColumn: any;
     localeColumn: any;
-    translatableColumnNames: string[];
+    translatableColumnNames: TColumnName[];
   },
-  data: Record<string, any>,
+  data: TranslationRowData<NoInfer<TColumnName>>,
 ) {
   const { table, fkColumn, localeColumn, translatableColumnNames } = i18nResult;
 
@@ -39,18 +44,15 @@ export async function upsertTranslation(
 /**
  * Bulk upsert translations for multiple locales at once (SQLite).
  */
-export async function setTranslations(
+export async function setTranslations<TColumnName extends string = string>(
   db: any,
   i18nResult: {
     table: SQLiteTable;
     fkColumn: any;
     localeColumn: any;
-    translatableColumnNames: string[];
+    translatableColumnNames: TColumnName[];
   },
-  data: {
-    [key: string]: any;
-    translations: Record<string, Record<string, any>>;
-  },
+  data: SetTranslationsData<NoInfer<TColumnName>>,
 ) {
   const { table, fkColumn, localeColumn, translatableColumnNames } = i18nResult;
   const fkKeyName = fkColumn.name;
@@ -60,7 +62,9 @@ export async function setTranslations(
 
   const results = [];
   for (const [locale, fields] of Object.entries(data.translations)) {
-    const colsInThisLocale = Object.keys(fields).filter((k) => translatableColumnNames.includes(k));
+    const colsInThisLocale = Object.keys(fields).filter((k) =>
+      translatableColumnNames.includes(k as TColumnName),
+    );
     if (colsInThisLocale.length === 0) continue;
 
     const setCols: Record<string, any> = {};
@@ -126,26 +130,23 @@ export async function updateLocale(
  *   },
  * });
  */
-export function insertWithTranslations(
+export function insertWithTranslations<TColumnName extends string = string>(
   db: any,
   parent: SQLiteTable,
   i18nResult: {
     table: SQLiteTable;
     fkColumn: any;
     localeColumn: any;
-    translatableColumnNames: string[];
+    translatableColumnNames: TColumnName[];
   },
-  data: {
-    values: Record<string, any>;
-    translations: Record<string, Record<string, any>>;
-  },
+  data: InsertWithTranslationsData<NoInfer<TColumnName>>,
 ) {
   const parentCols = getTableColumns(parent);
   const pk = findPrimaryKey(parentCols);
   const pkKey = pk.key;
   const fkKeyName = i18nResult.fkColumn.name;
   const localeKeyName = i18nResult.localeColumn.name;
-  const allowedCols = new Set(i18nResult.translatableColumnNames);
+  const allowedCols = new Set<string>(i18nResult.translatableColumnNames);
 
   function buildTranslationRows(pkValue: any) {
     return Object.entries(data.translations).map(([locale, fields]) => {
@@ -166,6 +167,30 @@ export function insertWithTranslations(
       .insert(parent)
       .values(data.values)
       .returning({ pk: (parent as any)[pkKey] });
+
+    if (insertResult && typeof insertResult.get === "function") {
+      const inserted = insertResult.get();
+      if (inserted && typeof inserted.then === "function") {
+        return inserted.then((row: any) => {
+          const pkValue = row.pk;
+          const translationRows = buildTranslationRows(pkValue);
+          if (translationRows.length > 0) {
+            return tx
+              .insert(i18nResult.table)
+              .values(translationRows)
+              .then(() => ({ ...data.values, [pkKey]: pkValue }));
+          }
+          return { ...data.values, [pkKey]: pkValue };
+        });
+      }
+
+      const pkValue = inserted.pk;
+      const translationRows = buildTranslationRows(pkValue);
+      if (translationRows.length > 0) {
+        tx.insert(i18nResult.table).values(translationRows).run();
+      }
+      return { ...data.values, [pkKey]: pkValue };
+    }
 
     if (insertResult && typeof insertResult.then === "function") {
       return insertResult.then((rows: any[]) => {

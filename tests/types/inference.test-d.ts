@@ -1,6 +1,7 @@
 import { pgTable, serial, text } from "drizzle-orm/pg-core";
 import { describe, expectTypeOf, it } from "vitest";
 import { jsonTranslations } from "../../src/pg/json-translations.js";
+import { insertWithTranslations, setTranslations } from "../../src/pg/mutate.js";
 import { translationTable } from "../../src/pg/translation-table.js";
 
 describe("type inference", () => {
@@ -50,5 +51,39 @@ describe("type inference", () => {
     expectTypeOf<CatSelect>().toHaveProperty("id");
     expectTypeOf<CatSelect>().toHaveProperty("name");
     expectTypeOf<CatSelect>().toHaveProperty("description");
+  });
+
+  it("mutation helpers narrow locale translation field names", () => {
+    const db = {} as any;
+
+    setTranslations(db, productI18n, {
+      product_id: 1,
+      translations: {
+        en: { name: "Phone", description: "A phone" },
+      },
+    });
+
+    insertWithTranslations(db, products, productI18n, {
+      values: { sku: "ABC" },
+      translations: {
+        en: { name: "Phone" },
+      },
+    });
+
+    setTranslations(db, productI18n, {
+      product_id: 1,
+      translations: {
+        // @ts-expect-error title is not a translatable column for productI18n
+        en: { title: "Phone" },
+      },
+    });
+
+    insertWithTranslations(db, products, productI18n, {
+      values: { sku: "ABC" },
+      translations: {
+        // @ts-expect-error title is not a translatable column for productI18n
+        en: { title: "Phone" },
+      },
+    });
   });
 });

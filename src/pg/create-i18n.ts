@@ -6,15 +6,27 @@ import type {
   PgTable,
 } from "drizzle-orm/pg-core";
 import { jsonb } from "drizzle-orm/pg-core";
+import {
+  exportTranslations as rawExportTranslations,
+  importTranslations as rawImportTranslations,
+} from "../core/batch.js";
 import type { I18nConfig, LocaleMap } from "../core/config.js";
 import { validateLocale } from "../core/config.js";
-import type { TranslationTableOptions, TranslationTableResult } from "../core/types.js";
+import { localizeResults as rawLocalizeResults } from "../core/localize-results.js";
+import type {
+  TranslationFieldValues,
+  TranslationRowData,
+  TranslationTableOptions,
+  TranslationTableResult,
+} from "../core/types.js";
+import { missingTranslations as rawMissingTranslations } from "./missing.js";
 import {
   insertWithTranslations as rawInsertWithTranslations,
   setTranslations as rawSetTranslations,
   updateLocale as rawUpdateLocale,
   upsertTranslation as rawUpsertTranslation,
 } from "./mutate.js";
+import { orderByLocale as rawOrderByLocale } from "./ordering.js";
 import { forLocale as rawForLocale, withTranslation as rawWithTranslation } from "./query.js";
 import { translationTable } from "./translation-table.js";
 
@@ -86,14 +98,50 @@ export function createI18n<
       return rawWithTranslation(db, parent, i18nResult, opts);
     },
 
+    localizeResults<
+      TRow extends Record<string, any>,
+      TRelationKey extends string = "translations",
+      TColNames extends string = string,
+    >(
+      rows: TRow[],
+      i18nResult: {
+        translatableColumnNames: TColNames[];
+        localeColumnName?: string;
+      },
+      opts: {
+        locale: TLocales[number];
+        fallback?: TLocales[number];
+        relationKey?: TRelationKey;
+      },
+    ) {
+      check(opts.locale, "localizeResults");
+      if (opts.fallback) check(opts.fallback, "localizeResults fallback");
+      return rawLocalizeResults(rows, i18nResult, opts);
+    },
+
+    missingTranslations(
+      db: any,
+      parent: PgTable,
+      i18nResult: TranslationTableResult<PgTable>,
+      locale: TLocales[number],
+    ) {
+      check(locale, "missingTranslations");
+      return rawMissingTranslations(db, parent, i18nResult, locale);
+    },
+
+    orderByLocale(column: PgColumn, locale: TLocales[number], direction: "asc" | "desc" = "asc") {
+      check(locale, "orderByLocale");
+      return rawOrderByLocale(column, locale, direction);
+    },
+
     upsertTranslation(
       db: any,
       i18nResult: TranslationTableResult<PgTable>,
-      data: Record<string, any>,
+      data: TranslationRowData,
     ) {
       if (strict) {
         const localeVal = data[i18nResult.localeColumnName ?? "locale"];
-        if (localeVal) validateLocale(localeVal, locales, "upsertTranslation");
+        if (typeof localeVal === "string") validateLocale(localeVal, locales, "upsertTranslation");
       }
       return rawUpsertTranslation(db, i18nResult, data);
     },
@@ -102,8 +150,8 @@ export function createI18n<
       db: any,
       i18nResult: TranslationTableResult<PgTable>,
       data: {
-        [key: string]: any;
-        translations: Partial<Record<TLocales[number], Record<string, any>>>;
+        [key: string]: unknown;
+        translations: Partial<Record<TLocales[number], TranslationFieldValues>>;
       },
     ) {
       if (strict) {
@@ -133,8 +181,8 @@ export function createI18n<
       parent: PgTable,
       i18nResult: TranslationTableResult<PgTable>,
       data: {
-        values: Record<string, any>;
-        translations: Partial<Record<TLocales[number], Record<string, any>>>;
+        values: Record<string, unknown>;
+        translations: Partial<Record<TLocales[number], TranslationFieldValues>>;
       },
     ) {
       if (strict) {
@@ -143,6 +191,30 @@ export function createI18n<
         }
       }
       return rawInsertWithTranslations(db, parent, i18nResult, data as any);
+    },
+
+    exportTranslations<TRow extends Record<string, any>>(
+      rows: TRow[],
+      i18nResult: { translatableColumnNames: string[] },
+      fkKey: string,
+      localeKey?: string,
+    ) {
+      return rawExportTranslations(rows, i18nResult, fkKey, localeKey);
+    },
+
+    importTranslations(
+      data: Record<string | number, Record<string, Record<string, any>>>,
+      fkKey: string,
+      localeKey?: string,
+    ) {
+      if (strict) {
+        for (const localesByParent of Object.values(data)) {
+          for (const locale of Object.keys(localesByParent)) {
+            validateLocale(locale, locales, "importTranslations");
+          }
+        }
+      }
+      return rawImportTranslations(data, fkKey, localeKey);
     },
   };
 }

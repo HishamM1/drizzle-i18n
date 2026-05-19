@@ -9,18 +9,45 @@ export interface TranslationTableOptions {
   localeLength?: number;
 }
 
+export type TranslationFieldValues<TColumnName extends string = string> = Partial<
+  Record<TColumnName, unknown>
+>;
+
+export type LocaleTranslationMap<TColumnName extends string = string> = Record<
+  string,
+  TranslationFieldValues<TColumnName>
+>;
+
+export type TranslationRowData<TColumnName extends string = string> = Record<string, unknown> &
+  TranslationFieldValues<TColumnName>;
+
+export interface SetTranslationsData<TColumnName extends string = string>
+  extends Record<string, unknown> {
+  translations: LocaleTranslationMap<TColumnName>;
+}
+
+export interface InsertWithTranslationsData<TColumnName extends string = string> {
+  values: Record<string, unknown>;
+  translations: LocaleTranslationMap<TColumnName>;
+}
+
 /**
  * The result shape returned by translationTable().
  * Used as the i18nResult parameter across query and mutation helpers.
  */
-export interface TranslationTableResult<TTable = any> {
+export interface TranslationTableResult<
+  TTable = unknown,
+  TColumnName extends string = string,
+  TFkColumn = unknown,
+  TLocaleColumn = unknown,
+> {
   table: TTable;
-  translationsRelations: any;
-  parentRelations: any;
-  parentRelationConfig: (helpers: any) => Record<string, any>;
-  translatableColumnNames: string[];
-  fkColumn: any;
-  localeColumn: any;
+  translationsRelations: unknown;
+  parentRelations: unknown;
+  parentRelationConfig: (helpers: unknown) => Record<string, unknown>;
+  translatableColumnNames: TColumnName[];
+  fkColumn: TFkColumn;
+  localeColumn: TLocaleColumn;
   /** The name of the locale column in the translations table. */
   localeColumnName: string;
 }

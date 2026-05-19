@@ -20,9 +20,15 @@ describe("pg createI18n", () => {
     expect(i18n.jsonTranslations).toBeTypeOf("function");
     expect(i18n.forLocale).toBeTypeOf("function");
     expect(i18n.withTranslation).toBeTypeOf("function");
+    expect(i18n.localizeResults).toBeTypeOf("function");
+    expect(i18n.missingTranslations).toBeTypeOf("function");
+    expect(i18n.orderByLocale).toBeTypeOf("function");
     expect(i18n.upsertTranslation).toBeTypeOf("function");
     expect(i18n.setTranslations).toBeTypeOf("function");
     expect(i18n.updateLocale).toBeTypeOf("function");
+    expect(i18n.insertWithTranslations).toBeTypeOf("function");
+    expect(i18n.exportTranslations).toBeTypeOf("function");
+    expect(i18n.importTranslations).toBeTypeOf("function");
   });
 
   it("stores config", () => {
@@ -99,6 +105,40 @@ describe("pg createI18n", () => {
       expect(() => {
         strictI18n.forLocale(table.name, "ar", { fallback: "en" });
       }).not.toThrow();
+    });
+
+    it("throws for unknown locales in additional factory helpers", () => {
+      const table = pgTable("test5", {
+        id: serial("id").primaryKey(),
+        name: jsonb("name"),
+      });
+      const products = pgTable("products_for_strict_test", {
+        id: serial("id").primaryKey(),
+        sku: text("sku").notNull(),
+      });
+      const productI18n = strictI18n.translationTable(products, {
+        name: text("name").notNull(),
+      });
+
+      expect(() => {
+        strictI18n.localizeResults([], productI18n, { locale: "de" as any });
+      }).toThrow('unknown locale "de"');
+      expect(() => {
+        strictI18n.missingTranslations({} as any, products, productI18n, "de" as any);
+      }).toThrow('unknown locale "de"');
+      expect(() => {
+        strictI18n.orderByLocale(table.name, "de" as any);
+      }).toThrow('unknown locale "de"');
+      expect(() => {
+        strictI18n.importTranslations(
+          {
+            1: {
+              de: { name: "Telefon" },
+            },
+          },
+          "product_id",
+        );
+      }).toThrow('unknown locale "de"');
     });
   });
 });
